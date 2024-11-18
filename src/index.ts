@@ -1,126 +1,59 @@
+import { app, BrowserWindow } from 'electron';
+import { Config, init, Login } from '@ims-tech-auto/core';
 import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import 'source-map-support/register.js';
 
-import * as Activity from './activity.js';
-import * as Processor from './course/processor.js';
-import * as Search from './course/search.js';
-import { waitForSPALoaded } from './utils.js';
-import Config from './config.js';
-import { login } from './login.js';
-import AIModel from './ai/AIModel.js';
-import { format } from 'util';
-import chalk from 'chalk';
+{
+  const { appendSwitch } = app.commandLine;
+  appendSwitch('remote-debugging-port', '9222');
+  appendSwitch('--no-sandbox');
+}
 
-(async () => {
-  await AIModel.init();
-
-  const browser = await chromium.use(StealthPlugin()).launch({
-    executablePath: process.env._CHROME_DEV!,
-    headless: false,
-    slowMo: 1000 // 搞太快会限制访问
+async function createWindow() {
+  const mainWindow = new BrowserWindow({
+    width: 1200,
+    height: 900,
+    webPreferences: {
+      nodeIntegration: false, // 禁用 Node.js Integration
+      contextIsolation: true, // 启用上下文隔离
+    },
   });
 
-  const page = await login(browser);
+  // 加载应用的本地文件
+  await mainWindow.loadURL(Config.default.urls.login());
 
-  await page.getByRole('link', { name: '我的课程' }).click();
-  await waitForSPALoaded(page);
+  mainWindow.webContents.on('did-finish-load', async () => {
+    console.log('Main window finished loading');
+  });
 
-  const listItems = await Activity.getActivities(page);
-
-  console.log('课程组数量: ', listItems.length);
-
-  for (let item of listItems) {
-    console.log('-'.repeat(60));
-    console.log(item.title, item.percent);
-
-    // 考试需要特殊处理
-    const courses = (await Search.getUncompletedCourses(page, item)).filter(
-      (course) => course.progress != 'full' || course.type == 'exam'
-    );
-
-    for (const [i, course] of courses.entries()) {
-      console.log(
-        chalk.bgBlueBright(
-          format(
-            '%s %s %s : %d/%d',
-            course.syllabusName ?? course.moduleName,
-            course.activityName,
-            course.progress,
-            i,
-            courses.length
-          )
-        )
+  mainWindow.webContents.on(
+    'did-fail-load',
+    (event, errorCode, errorDescription) => {
+      console.error(
+        `Page failed to load: ${errorDescription} (Error code: ${errorCode})`,
       );
+    },
+  );
 
-      const processor = Processor.getProcessor(course.type);
-      if (!processor) {
-        console.warn(
-          '不支持的课程类型:',
-          Processor.getCourseType(course.type),
-          '\n'
-        );
-        continue;
-      }
+  await connectToElectron();
+  // 使用 Playwright 连接窗口，示例连接到CDP端口（确保 Electron 打开时调试端口暴露）
+  // await AIModel.init(true);
+}
 
-      if (processor.condition && !(await processor.condition(course))) {
-        continue;
-      }
+async function connectToElectron() {
+  // 连接到 Electron 的 CDP 端口
+  const browser = await chromium
+    .use(StealthPlugin())
+    .connectOverCDP('http://localhost:9222');
+  // 获取浏览器页面
 
-      let tLoc = page.locator(`#${course.moduleId}`);
-      if (course.syllabusId) {
-        tLoc = tLoc.locator(`#${course.syllabusId}`);
-      }
-      const t = (await tLoc
-        .getByText(course.activityName, { exact: true })
-        .elementHandle())!;
+  // 在页面中执行操作
+  const page = await Login.login(browser);
+  await init(page);
+}
 
-      if ((await t.getAttribute('class'))!.lastIndexOf('locked') != -1) {
-        console.log('课程锁定', '跳过');
-        continue;
-      }
+app.whenReady().then(createWindow);
 
-      if (await t.$('xpath=../*[contains(@class, "upcoming")]')) {
-        console.log('课程未开始', '跳过');
-        continue;
-      }
-
-      await t.click();
-
-      await page.waitForURL(RegExp(`^${Config.urls.course()}.*`), {
-        timeout: 30000,
-        waitUntil: 'domcontentloaded'
-      });
-
-      for (let count = 5; count > -1; count--) {
-        await waitForSPALoaded(page);
-        try {
-          await processor.exec(page);
-          break;
-        } catch (e) {
-          console.error(e);
-          console.log('process course failed: retry', count);
-          await page.reload({ timeout: 1000 * 60 });
-        }
-      }
-
-      // 回到课程选择页
-      await page.goBack({
-        timeout: 0,
-        waitUntil: 'domcontentloaded'
-      });
-      await page.reload({
-        timeout: 10000,
-        waitUntil: 'domcontentloaded'
-      });
-      // console.debug("go back to course page");
-    }
-    await page.goBack({
-      timeout: 0,
-      waitUntil: 'domcontentloaded'
-    });
-  }
-  console.log('program end...');
-  // Teardown
-  await browser.close();
-})();
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});

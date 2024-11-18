@@ -1,10 +1,11 @@
 import { Browser, Cookie } from 'playwright';
 
 import * as fs from 'fs';
+import path from 'path';
 
-import Config, { API_BASE_URL } from './config.js';
+import Config from './config.js';
 
-const cookieFilename = './.cookies.txt';
+const cookieFilename = path.join(process.cwd(), '.cookies.txt');
 
 async function login(browser: Browser) {
   const context =
@@ -17,7 +18,7 @@ async function login(browser: Browser) {
   if (cookies.length != 0) {
     await context.clearCookies();
 
-    await context.addCookies(cookies).catch((e) => {
+    await context.addCookies(filterCookies(cookies, ['session'])).catch((e) => {
       console.warn('解析Cookie文件失败:', e);
       fs.rmSync(cookieFilename);
     });
@@ -33,24 +34,30 @@ async function login(browser: Browser) {
     return page;
   }
 
+  if (Config.browser.headless) {
+    throw '需要手动进行验证, 请关闭无头模式';
+  }
+
   console.log('需要登陆');
 
-  await page.getByPlaceholder('请输入登录名').fill(process.env._ACCOUNT!);
-  await page.getByPlaceholder('请输入登录密码').fill(process.env._PASSWORD!);
+  const { account, password } = Config.user;
+
+  if (account && password) {
+    await page.getByPlaceholder('请输入登录名').fill(account);
+    await page.getByPlaceholder('请输入登录密码').fill(password);
+  } else {
+    console.warn('缺少账号或密码, 需要手动输入');
+  }
+
   const agree = page.locator('#agreeCheckBox').first();
   await agree.setChecked(true);
-  await page.getByRole('button', { name: '登录' }).click();
+
+  if (account && password) {
+    await page.getByRole('button', { name: '登录' }).click();
+  }
 
   // 等待跳转, timeout 可能被父级 page option覆盖呢..., 在这里显式声明好了
   await page.waitForURL(Config.urls.home(), { timeout: 1000 * 60 * 5 });
-
-  if (cookies.length == 0)
-    await storeCookies(
-      filterCookies(await context.cookies()).map((cookie) => ({
-        ...cookie,
-        domain: API_BASE_URL.substring('https://'.length)
-      }))
-    );
 
   return page;
 }
@@ -65,7 +72,7 @@ async function restoreCookies(): Promise<Array<Cookie>> {
   if (fs.existsSync(cookieFilename)) {
     // playwright 不识别null,需要转换undefined
     const cookies: Cookie[] = JSON.parse(
-      String(fs.readFileSync(cookieFilename))
+      String(fs.readFileSync(cookieFilename)),
     );
     cookies.forEach((cookie) => {
       for (const k in cookie) {
@@ -76,7 +83,7 @@ async function restoreCookies(): Promise<Array<Cookie>> {
       cookie.sameSite = {
         STRICT: 'Strict',
         LAX: 'Lax',
-        None: 'None'
+        None: 'None',
       }[cookie.sameSite.toUpperCase()] as any;
     });
 
@@ -85,10 +92,14 @@ async function restoreCookies(): Promise<Array<Cookie>> {
   return [];
 }
 
-function filterCookies(cookies: Array<Cookie>) {
-  return cookies.filter((cookie) =>
-    ['HWWAFSESID', 'HWWAFSESTIME', 'session'].includes(cookie.name)
-  );
+/**
+ *
+ * @param cookies Cookie数组
+ * @param names 需要哪些Cookie匹配的name
+ * @returns 过滤后符合names的Cookie数组
+ */
+function filterCookies(cookies: Array<Cookie>, names: string[]) {
+  return cookies.filter((cookie) => names.includes(cookie.name));
 }
 
-export { login, storeCookies, restoreCookies };
+export { filterCookies, login, restoreCookies, storeCookies };

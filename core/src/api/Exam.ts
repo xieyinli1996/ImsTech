@@ -1,8 +1,6 @@
-import { Axios, HttpStatusCode } from 'axios';
+import { Axios, AxiosResponse, HttpStatusCode } from 'axios';
 import { newAxiosInstance } from './axiosInstance.js';
-import Config, { API_BASE_URL } from '../config.js';
-import { Cookie, Page } from 'playwright';
-import { restoreCookies } from '../login.js';
+import { API_BASE_URL } from '../config.js';
 
 // true_or_false 判断题
 // single_selection 单选题
@@ -17,7 +15,8 @@ export type SubjectType =
   | 'text'
   | 'true_or_false'
   | 'single_selection'
-  | 'multiple_selection';
+  | 'multiple_selection'
+  | 'short_answer';
 export type SubjectId = number;
 export type OptionId = number;
 
@@ -33,13 +32,12 @@ export default class {
     this.#activityId = activityId;
     this.#axios = newAxiosInstance(`exams/${activityId}`);
     // 为了过检测
-    this.#axios.defaults.headers.common[
-      'Referer'
-    ] = `${API_BASE_URL}/exam/${activityId}/subjects`;
+    this.#axios.defaults.headers.common['Referer'] =
+      `${API_BASE_URL}/exam/${activityId}/subjects`;
   }
 
   addCookies(cookies: Array<{ name: string; value: string }>) {
-    console.log('Exam add Cookies:\n', cookies);
+    // console.log('Exam add Cookies:\n', cookies);
 
     const headers = this.#axios.defaults.headers;
     headers.common['Cookie'] = cookies
@@ -67,7 +65,24 @@ export default class {
    *             "point": "25.0",
    *             "sub_subjects": [] // 如果type是random 那么这里是随机题目的类型
    *             "type": "true_or_false"
-   *         }
+   *         },
+   *         {
+   *              "has_audio": false,
+   *              "id": 60020719291,
+   *              "point": "4.0",
+   *              "sub_subjects": [
+   *                  {
+   *                      "point": "4.0",
+   *                      "type": "single_selection"
+   *                  },
+   *                  {
+   *                      "point": "4.0",
+   *                      "type": "single_selection"
+   *                  },
+   *                  ...
+   *              ],
+   *              "type": "random"
+   *          },
    *         ...
    *     ]
    * }
@@ -75,7 +90,7 @@ export default class {
    * */
   async getSubjectsSummary(forAllSubjects: boolean) {
     const response = await this.#axios.get('subjects-summary', {
-      params: { forAllSubjects }
+      params: { forAllSubjects },
     });
 
     const subjectsSummary: {
@@ -83,7 +98,7 @@ export default class {
         has_audio: boolean;
         id: SubjectId;
         point: string;
-        // sub_subjects: Array<any>;
+        sub_subjects: Array<any>;
         type: SubjectType;
       }>;
     } = response.data;
@@ -115,12 +130,17 @@ export default class {
    * ```
    */
   async getSubmissions() {
-    const response = await this.#axios.get('submissions');
+    const response = await this.#axios
+      .get('submissions')
+      .catch((resp: AxiosResponse) => {
+        if (resp.status == HttpStatusCode.NotFound) return { data: {} };
+        throw resp.statusText;
+      });
 
     const submissions: {
-      exam_final_score: null | number;
+      exam_final_score: number | undefined | null;
       exam_score: number | undefined;
-      exam_score_rule: string;
+      exam_score_rule: string | undefined;
       submissions:
         | Array<{
             created_at: string;
@@ -139,14 +159,25 @@ export default class {
   /**
    * 获取指定考试记录信息
    * @param id 考试记录id
-   *
-   * @return
-   *
-   *
    */
   async getSubmission(id: SubjectId) {
     const response = await this.#axios.get(`submissions/${id}`);
     const submission: {
+      score: number;
+      subjects_data: {
+        subjects: Array<{
+          id: SubjectId;
+          description: string; // 标题
+          point: string; // 分数 number 3.0
+          type: SubjectType;
+          options: Array<{
+            content: string; // 题目选项内容
+            id: OptionId;
+            sort: number;
+            type: SubjectType;
+          }>;
+        }>;
+      };
       submission_data: {
         subjects: Array<{
           answer_option_ids: OptionId[];
@@ -213,7 +244,7 @@ export default class {
           id: OptionId; // 答案id
           type: string; // 类型
         }>;
-        point: string; // 分数
+        point: string; // 得分百分比
         type: SubjectType;
       }>;
     } = response.data;
@@ -231,14 +262,14 @@ export default class {
    * @return 当你提交答案时需要带上 id
    */
   async submissionsStorage(
-    distribute: Awaited<ReturnType<typeof this.getDistribute>>
+    distribute: Awaited<ReturnType<typeof this.getDistribute>>,
   ): Promise<number | undefined> {
     const url = 'submissions/storage';
     let response = await this.#axios.get(url).catch(() => void 0);
 
     if (!response || response.status == HttpStatusCode.NotFound) {
       const subjects = distribute.subjects.filter(
-        (subject) => subject.type != 'text'
+        (subject) => subject.type != 'text',
       );
 
       response = await this.#axios.post(url, {
@@ -247,12 +278,12 @@ export default class {
         subjects: subjects.map((subject) => ({
           subject_id: subject.id,
           subject_updated_at: subject.last_updated_at,
-          answer_option_ids: []
+          answer_option_ids: [],
         })),
         progress: {
           answered_num: 0,
-          total_subjects: distribute.subjects.length
-        }
+          total_subjects: distribute.subjects.length,
+        },
       });
     }
 
@@ -260,11 +291,12 @@ export default class {
   }
 
   /**
-   * 提交答案
-   * @param examPaperInstanceId 同 submissionStorge
-   * @param examSubmissionId submissionStorge返回值
+   * 提交答案, 不能频繁提交
+   *
+   * @param examPaperInstanceId 同 submissionStorage
+   * @param examSubmissionId submissionStorage返回值
    * @param subjects 答案数组
-   * @param totalSubjects 同 submissionStoge
+   * @param totalSubjects 同 submissionStorage
    */
   async postSubmissions(
     examPaperInstanceId: number,
@@ -274,21 +306,21 @@ export default class {
       answerOptionIds: OptionId[];
       updatedAt: string;
     }>,
-    totalSubjects: number
+    totalSubjects: number,
   ) {
     const response = await this.#axios.post('submissions', {
       exam_paper_instance_id: examPaperInstanceId,
       exam_submission_id: examSubmissionId,
       progress: {
         answered_num: subjects.length,
-        total_subjects: totalSubjects
+        total_subjects: totalSubjects,
       },
       reason: 'user',
       subjects: subjects.map((subject) => ({
         subject_id: subject.subjectId,
         answer_option_ids: subject.answerOptionIds,
-        subject_updated_at: subject.updatedAt
-      }))
+        subject_updated_at: subject.updatedAt,
+      })),
     });
 
     return response.data;

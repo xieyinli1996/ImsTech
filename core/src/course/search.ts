@@ -29,7 +29,7 @@ async function getModulesData(locs: Array<Locator>) {
       const syllabusesLoc = await module.locator('div.course-syllabus').all();
 
       return { moduleId, moduleName, module, syllabusesLoc };
-    })
+    }),
   );
 }
 
@@ -57,7 +57,7 @@ async function getSyllabusesData(moduleData: {
         moduleName,
         syllabusId,
         syllabusName,
-        activitiesLocList: await getActivitiesList(syllabusLoc)
+        activitiesLocList: await getActivitiesList(syllabusLoc),
       };
     });
 
@@ -70,14 +70,14 @@ async function getSyllabusesData(moduleData: {
       moduleName,
       syllabusId: null,
       syllabusName: null,
-      activitiesLocList: await getActivitiesList(module)
-    }
+      activitiesLocList: await getActivitiesList(module),
+    },
   ];
 }
 
 async function getUncompletedCourses(
   page: Page,
-  activityInfo: Activity.ActivityInfo
+  activityInfo: Activity.ActivityInfo,
 ): Promise<CourseInfo[]> {
   console.log('正在获取未完成的课程...');
 
@@ -87,15 +87,11 @@ async function getUncompletedCourses(
   await waitForSPALoaded(page);
   await page.locator('input[type="checkbox"]').setChecked(false);
 
-  await page.waitForLoadState('domcontentloaded');
+  await waitForSPALoaded(page);
+  const expandBtn = page.getByText(/全部(?:收起|展开)/);
 
-  if ((await page.getByText('全部收起').count()) == 0) {
-    await page
-      .getByText('全部展开')
-      .click({ timeout: 500 })
-      .catch(() => {
-        console.warn('没有全部展开按钮,可能已经展开?');
-      });
+  if ((await expandBtn.textContent())!.indexOf('收起')) {
+    await expandBtn.click();
     await page.waitForLoadState('domcontentloaded');
   }
 
@@ -103,13 +99,17 @@ async function getUncompletedCourses(
   const modules = await page.locator('div.module').all();
   const modulesData = await getModulesData(modules);
 
+  console.log('get ModulesData count:', modulesData.length);
+
   const syllabusesData = (
     await Promise.all(modulesData.map(getSyllabusesData))
   ).flat();
 
-  // some stuff is finished, so is empty, we will skip
+  console.log('get SyllabusesData count:', syllabusesData.length);
+
+  // some stuff is finished, so is empty, we need skip
   const hasContentActivity = async (activity: Locator) => {
-    return (await activity.innerHTML({ timeout: 1000 }).catch(() => '')) != '';
+    return await activity.locator(':nth-child(n)').count();
   };
 
   // 过滤无内容和隐藏的活动 usableActivities
@@ -127,28 +127,30 @@ async function getUncompletedCourses(
                   moduleId: syllabus.moduleId,
                   moduleName: syllabus.moduleName,
                   syllabusId: syllabus.syllabusId,
-                  syllabusName: syllabus.moduleName,
+                  syllabusName: syllabus.syllabusName,
                   type: await getActivityType(activityLoc),
                   activityId: await getActivityId(activityLoc),
                   activityName: await getActivityName(activityLoc),
-                  activityLoc
+                  activityLoc,
                 }
-              : []
-          )
+              : [],
+          ),
         )
       ).flat();
-    })
+    }),
   );
 
   const activities = (await Promise.all(activitiesAsync)).flat();
 
+  console.log('get activities count:', activities.length);
+
   // 最后填充进度和活动名
   const coursesData = activities.map(async (activity) => {
     const complete = activity.activityLoc.locator(
-      'activity-completeness-bar div.completeness'
+      'activity-completeness-bar div.completeness',
     );
 
-    // completeness part
+    // 完成进度
     const progress = await complete
       .getAttribute('class', { timeout: 1000 })
       .then(String)
@@ -175,7 +177,7 @@ async function getActivityName(activity: Locator) {
   const title = await titleElt.textContent();
   if (!title) {
     console.log(activity);
-    throw 'error: course title is undefined';
+    throw 'course title is undefined';
   }
   return title;
 }

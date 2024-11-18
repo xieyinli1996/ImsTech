@@ -26,7 +26,7 @@ async function waitForSPALoaded(page: Page) {
 function input(query: string) {
   const rl = ReadLine.createInterface({
     input: process.stdin,
-    output: process.stdout
+    output: process.stdout,
   });
 
   return new Promise<string>((resolve) => {
@@ -37,4 +37,12 @@ function input(query: string) {
   });
 }
 
-export { input, waitForSPALoaded };
+function parseDOMText(page: Page, str: string) {
+  return page.evaluate((str) => {
+    const div = document.createElement('div');
+    div.innerHTML = str;
+    return div.innerText;
+  }, str);
+}
+
+export { input, waitForSPALoaded, parseDOMText };

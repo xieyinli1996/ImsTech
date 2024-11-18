@@ -21,16 +21,16 @@ test('单项选择题测试', async () => {
     '社会主义核心价值观',
     '儒家思想',
     '革命文化',
-    '中华优秀传统文化'
+    '中华优秀传统文化',
   ];
 
   let r = await AIModel.instance!.getResponse(
     'single_selection',
     description,
-    options
+    options,
   );
 
-  console.log(r.map(letters));
+  console.log(letters(r));
 
   // AI回答正确为C
   description = '文化自信的显著特点是（  ）';
@@ -38,16 +38,16 @@ test('单项选择题测试', async () => {
     '实现文化传承',
     '坚守民族立场',
     '坚守中华文明立场',
-    '人类共同价值'
+    '人类共同价值',
   ];
 
   r = await AIModel.instance!.getResponse(
     'single_selection',
     description,
-    options
+    options,
   );
 
-  console.log(r.map(letters));
+  console.log(letters(r));
 });
 
 test('判断题测试', async () => {
@@ -60,10 +60,10 @@ test('判断题测试', async () => {
   let r = await AIModel.instance!.getResponse(
     'true_or_false',
     description,
-    options
+    options,
   );
 
-  console.log(r.map(letters));
+  console.log(letters(r));
 
   // AI回答A, 正确答案为A
   description =
@@ -73,8 +73,8 @@ test('判断题测试', async () => {
   r = await AIModel.instance!.getResponse(
     'true_or_false',
     description,
-    options
+    options,
   );
 
-  console.log(r.map(letters));
+  console.log(letters(r));
 });
